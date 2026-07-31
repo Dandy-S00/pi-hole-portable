@@ -1,5 +1,7 @@
 # ESP32-S3 Pi-hole (SD-backed DNS Sinkhole) for Waveshare boards
 
+[![Build firmware](https://github.com/Dandy-S00/pi-hole-portable/actions/workflows/build.yml/badge.svg)](https://github.com/Dandy-S00/pi-hole-portable/actions/workflows/build.yml)
+
 Turn a **Waveshare ESP32-S3** dev board into a **network-wide ad/tracker blocker**
 (Pi-hole style) that stores its blocklist on the **microSD card you expanded the
 board with** instead of limited on-chip flash/PSRAM.
@@ -77,15 +79,80 @@ The firmware never loads the full list into RAM. Each DNS query does a handful o
 That is why a large SD card is a feature, not waste: you can drop the biggest
 blocklists (StevenBlack + Hagezi Ultimate + more) with zero RAM pressure.
 
+## Architecture
+
+```mermaid
+flowchart LR
+    subgraph LAN["Your LAN"]
+        C1["Phone / Laptop"]
+        C2["Smart TV"]
+        C3["IoT devices"]
+        R["Router (DHCP)<br/>DNS = ESP32-S3 IP"]
+    end
+
+    subgraph BOARD["Waveshare ESP32-S3 + microSD"]
+        DNS["DNS Sinkhole<br/>UDP/TCP :53"]
+        BL["Blocklist lookup<br/>binary search<br/>/sdcard/blocklist.bin"]
+        SD[(("microSD card<br/>(expanded storage)<br/>sorted 5-byte<br/>FNV-1a hashes"))]
+        UP["Forward to<br/>upstream resolver"]
+    end
+
+    NET["Internet<br/>(Quad9 9.9.9.9)"]
+
+    C1 --> R
+    C2 --> R
+    C3 --> R
+    R -->|DNS query| DNS
+    DNS -->|hash domain + suffix| BL
+    BL -->|seek+read 5 bytes| SD
+    SD -->|hit = blocked| DNS
+    DNS -->|reply 0.0.0.0| R
+    BL -->|miss = allowed| UP
+    UP --> NET
+    NET -->|real answer| DNS
+    DNS -->|reply| R
+
+    style SD fill:#1f6f43,stroke:#2ecc71,color:#fff
+    style DNS fill:#0b3d5c,stroke:#3498db,color:#fff
+    style BL fill:#3a2d5c,stroke:#9b59b6,color:#fff
+    style UP fill:#5c3a0b,stroke:#e67e22,color:#fff
+```
+
+Every DNS query on the LAN is intercepted by the ESP32-S3. The domain (and each
+parent suffix) is hashed with FNV-1a and binary-searched against `blocklist.bin` on
+the SD card. A **hit** → answer `0.0.0.0` (sinkholed). A **miss** → forward to the
+upstream resolver and relay the real answer. See [`docs/architecture.md`](docs/architecture.md)
+for the source of this diagram.
+
+## Build firmware in CI (GitHub Actions)
+
+Pushing to `main` automatically builds `firmware.bin` via PlatformIO. The build
+matrix uploads the `.bin` as a downloadable artifact — so you don't need
+PlatformIO installed locally to flash.
+
+- **Download the built firmware:** repo → *Actions* → latest run → *Artifacts*
+  (`esp32s3-pihole-firmware-...`).
+- **Flash it:** `esptool.py write_flash 0x0 firmware.bin` (or use the ESP Web
+  Flasher with the artifact).
+- **Different board?** run the workflow manually (`workflow_dispatch`) and set the
+  `board` input (e.g. `esp32-s3-zero`).
+
+> The CI build uses `board = esp32-s3-devkitc-1` by default; change it in
+> `platformio.ini` or pass the `board` input.
+
 ## Files
 
 ```
 esp32s3-pihole/
 ├── platformio.ini            # build config
+├── .github/workflows/
+│   └── build.yml             # CI: builds firmware.bin on push/PR
 ├── src/
 │   ├── main.cpp              # DNS sinkhole + SD-card blocklist loader
 │   └── secrets.example.h     # WiFi template (copy to secrets.h)
 ├── tools/
 │   └── build_blocklist.py    # hosts -> sorted 5-byte hash file for the SD card
+├── docs/
+│   └── architecture.md       # Mermaid diagram source
 └── data/                     # working dir for build artifacts
 ```
