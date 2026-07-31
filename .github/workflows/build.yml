@@ -3,10 +3,6 @@ name: Build ESP32-S3 Pi-hole firmware
 on:
   push:
     branches: [ main, master ]
-    paths:
-      - 'src/**'
-      - 'platformio.ini'
-      - '.github/workflows/build.yml'
   pull_request:
     branches: [ main, master ]
   workflow_dispatch:
@@ -24,24 +20,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Set board from input (optional)
+        if: ${{ github.event.inputs.board != '' }}
+        run: |
+          echo "Building for board: ${{ github.event.inputs.board }}"
+          sed -i "s/^board = .*/board = ${{ github.event.inputs.board }}/" platformio.ini
+
+      - name: Build firmware with PlatformIO
+        uses: platformio/platformio-action@v1
         with:
-          python-version: '3.11'
-
-      - name: Install PlatformIO
-        run: |
-          python -m pip install --upgrade pip
-          pip install platformio
-
-      - name: Build firmware (PlatformIO)
-        env:
-          PLATFORMIO_CI_BOARD: ${{ github.event.inputs.board || 'esp32-s3-devkitc-1' }}
-        run: |
-          echo "Building for board: ${PLATFORMIO_CI_BOARD}"
-          # Allow overriding the board from CI without editing platformio.ini
-          sed -i "s/^board = .*/board = ${PLATFORMIO_CI_BOARD}/" platformio.ini
-          pio run
+          projects: .
+          targets: build
 
       - name: Upload firmware artifact
         uses: actions/upload-artifact@v4
